@@ -28,6 +28,9 @@
     <ClInclude Include="glfw3.h" />
     <ClInclude Include="KHR\khrplatform.h" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include=".github\copilot-instructions.md" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>

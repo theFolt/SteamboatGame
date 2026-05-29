@@ -13,6 +13,7 @@ uniform mat4 projection;
 uniform float u_time;
 uniform bool u_isWater;
 uniform vec3 viewPos;
+uniform float u_waveTransition;
 
 // --- BUFOR HISTORII STATKU (Kelvin Wake / Zasada Huygensa) ---
 const int MAX_POINTS = 60;
@@ -21,6 +22,12 @@ uniform vec3  u_histPosL[MAX_POINTS];
 uniform float u_histSpeed[MAX_POINTS];
 uniform float u_histTime[MAX_POINTS];
 uniform int   u_histCount;
+
+// --- Parametry Fal Ślądu ---
+uniform float u_wakeBaseAmplitude;
+uniform float u_waveNumber;
+uniform float u_waveOmega;
+uniform float u_wakeSpreadFactor;
 
 // Parametry fal oceanicznych (tło)
 const int   NUM_WAVES     = 6;
@@ -65,8 +72,8 @@ void main()
         float steep = waveSteep[i];
 
         float phase = freq * dot(dir, posXZ) + spd * u_time;
-        oceanH  += amp  * sin(phase);
-        offset  += steep * amp * dir * cos(phase);
+        oceanH  += amp  * u_waveTransition * sin(phase);
+        offset  += steep * amp * dir * cos(phase) * u_waveTransition;
     }
 
     pos.x  += offset.x;
@@ -80,9 +87,9 @@ void main()
     float totalWakeH = 0.0;
     vec2 totalWakeOffset = vec2(0.0);
 
-   // Fizyka fali
-    float k = 12.0;     
-    float omega = 4.5;  // ZMNIEJSZONO Z 9.0: Szczyty fal uciekają na boki o połowę wolniej
+    // Fizyka fali (domyślne wartości do przesłania z C++)
+    float k = u_waveNumber;     
+    float omega = u_waveOmega;
 
     for (int i = 0; i < u_histCount; i++)
     {
@@ -93,11 +100,10 @@ void main()
         float speed = u_histSpeed[i];
         if (abs(speed) < 0.1) continue;
 
-        // ZMNIEJSZONO MNOŻNIK dt Z 1.2 NA 0.4: 
-        // Plama fali powiększa się znacznie wolniej, co drastycznie zwęża "literę V" kilwateru
-        float spread = 0.5 + 0.4 * dt; 
-        
-        float baseAmplitude = 0.008; 
+        // Spread factor kontroluje jak szybko powiększa się fala
+        float spread = 0.5 + u_wakeSpreadFactor * dt; 
+
+        float baseAmplitude = u_wakeBaseAmplitude;
 
         // --- Ślad prawego koła ---
         vec2 posR = u_histPosR[i].xz;
