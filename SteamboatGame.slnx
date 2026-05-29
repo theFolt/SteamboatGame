@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="SteamboatGame.vcxproj" Id="ae479c8a-03c8-42c9-9c3c-673473ee3d4b" />
+</Solution>
