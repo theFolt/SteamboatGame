@@ -23,13 +23,16 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="backends\imgui_impl_glfw.h" />
+    <ClInclude Include="backends\imgui_impl_opengl3.h" />
     <ClInclude Include="boat_geometry.h" />
     <ClInclude Include="glad.h" />
     <ClInclude Include="glfw3.h" />
+    <ClInclude Include="GLFW\glfw3.h" />
+    <ClInclude Include="GLFW\glfw3native.h" />
+    <ClInclude Include="imconfig.h" />
+    <ClInclude Include="imgui.h" />
     <ClInclude Include="KHR\khrplatform.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include=".github\copilot-instructions.md" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>

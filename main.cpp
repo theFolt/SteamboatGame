@@ -6,6 +6,18 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "boat_geometry.h"
+#define IMGUI_DEFINE_MATH_OPERATORS
+#include "imgui.h"
+#include "backends/imgui_impl_glfw.h"
+#define IMGUI_IMPL_OPENGL_LOADER_GLAD
+#include "backends/imgui_impl_opengl3.h"
+#include "imgui.cpp"
+#include "imgui_draw.cpp"
+#include "imgui_widgets.cpp"
+#include "imgui_tables.cpp"
+#include "imgui_demo.cpp"
+#include "backends/imgui_impl_glfw.cpp"
+#include "backends/imgui_impl_opengl3.cpp"
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -53,9 +65,8 @@ const WaveParams waves[] = {
     {glm::vec2(0.3f,  0.9f), 0.06f, 1.5f, 0.75f, 0.25f},
     {glm::vec2(-0.4f,-0.9f), 0.07f, 1.1f, 0.55f, 0.32f}
 };
-float getWaterHeight(float x, float z, float t, bool includeWaves = true) {
+float getWaterHeight(float x, float z, float t) {
     float h = 0.0f;
-    if (!includeWaves) return h;
     for (const auto& w : waves)
         h += w.amp * sinf(w.freq * (w.dir.x * x + w.dir.y * z) + w.speed * t);
     return h;
@@ -139,17 +150,60 @@ unsigned int generateNormalTexture() {
 // ===================================================================
 // MAIN
 // ===================================================================
-int main() {
-    glfwInit();
+    int main() {
+    if (!glfwInit()) {
+        std::cerr << "GLFW init failed\n";
+        return -1;
+    }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     GLFWwindow* window = glfwCreateWindow(1280, 720, "Steamboat - Dynamic Wake History", NULL, NULL);
+    if (!window) {
+        std::cerr << "glfwCreateWindow failed\n";
+        glfwTerminate();
+        return -1;
+    }
     glfwMakeContextCurrent(window);
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { std::cout << "GLAD error\n"; return -1; }
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) { std::cerr << "GLAD error\n"; return -1; }
+    if (!glfwGetCurrentContext()) { std::cerr << "No current GL context\n"; return -1; }
+    // --- Diagnostic: print addresses of important GL/GLFW function pointers ---
+    std::cout << "glfwGetProcAddress = " << (void*)glfwGetProcAddress << "\n";
+#ifdef glad_glEnable
+    std::cout << "glad_glEnable = " << (void*)glad_glEnable << "\n";
+    if (!glad_glEnable) std::cerr << "glad_glEnable is NULL\n";
+#else
+    std::cout << "glad_glEnable not available in this build\n";
+#endif
+#ifdef glad_glGetError
+    std::cout << "glad_glGetError = " << (void*)glad_glGetError << "\n";
+#endif
+#ifdef glad_glEnable
+    if (glad_glEnable) glad_glEnable(GL_DEPTH_TEST);
+    else std::cerr << "ERROR: glad_glEnable is NULL, cannot enable GL_DEPTH_TEST\n";
+#else
+    std::cerr << "WARNING: glad_glEnable not available, cannot enable GL_DEPTH_TEST\n";
+#endif
+#ifdef glad_glEnable
+    if (glad_glEnable) glad_glEnable(GL_BLEND);
+    else std::cerr << "ERROR: glad_glEnable is NULL, cannot enable GL_BLEND\n";
+#else
+    std::cerr << "WARNING: glad_glEnable not available, cannot enable GL_BLEND\n";
+#endif
+#ifdef glad_glBlendFunc
+    if (glad_glBlendFunc) glad_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    else std::cerr << "ERROR: glad_glBlendFunc is NULL, cannot set blend func\n";
+#else
+    std::cerr << "WARNING: glad_glBlendFunc not available, cannot set blend func\n";
+#endif
+
+    // --- Initialize Dear ImGui ---
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 330");
 
     unsigned int waterProgram = createShaderProgram("shaders/water.vert", "shaders/water.frag");
     unsigned int skyboxProgram = createShaderProgram("shaders/skybox.vert", "shaders/skybox.frag");
@@ -166,7 +220,6 @@ int main() {
     GLint wTexTile = glGetUniformLocation(waterProgram, "u_textureTiling");
     GLint wSpecPow = glGetUniformLocation(waterProgram, "u_specularPower");
     GLint wFresPow = glGetUniformLocation(waterProgram, "u_fresnelPower");
-    GLint wWaveTransition = glGetUniformLocation(waterProgram, "u_waveTransition");
 
     // --- Uniformy do bufora historii ---
     GLint wHistPosR = glGetUniformLocation(waterProgram, "u_histPosR");
@@ -174,12 +227,6 @@ int main() {
     GLint wHistSpeed = glGetUniformLocation(waterProgram, "u_histSpeed");
     GLint wHistTime = glGetUniformLocation(waterProgram, "u_histTime");
     GLint wHistCount = glGetUniformLocation(waterProgram, "u_histCount");
-
-    // --- Uniformy Fal Ślądu ---
-    GLint wWakeBaseAmplitude = glGetUniformLocation(waterProgram, "u_wakeBaseAmplitude");
-    GLint wWaveNumber = glGetUniformLocation(waterProgram, "u_waveNumber");
-    GLint wWaveOmega = glGetUniformLocation(waterProgram, "u_waveOmega");
-    GLint wWakeSpreadFactor = glGetUniformLocation(waterProgram, "u_wakeSpreadFactor");
 
     // --- Uniformy: łódka ---
     GLint bModel = glGetUniformLocation(boatProgram, "model");
@@ -239,26 +286,19 @@ int main() {
     // --- Stan łódki ---
     glm::vec3 boatPos(0.0f);
     float boatYaw = 0.0f, boatSpeed = 0.0f, rudder = 0.0f, wheelAngle = 0.0f;
-    const float maxSpeed = 3.0f, accel = 0.7f, brakeF = 1.5f;
-    const float rudderSpd = 0.4f, rudderDecay = 1.0f, turnSpeed = 1.5f;
+    const float maxSpeed = 4.0f, accel = 3.5f, brakeF = 6.0f;
+    const float rudderSpd = 1.5f, rudderDecay = 1.0f, turnSpeed = 1.5f;
     const float dtLimit = 0.05f, eps = 0.01f;
+
+    // --- ImGui control state: indices (0..4) mapping to discrete steps ---
+    int leftThrottleIdx = 0, rightThrottleIdx = 0, rudderIdx = 2; // default center rudder
+    const float throttleSteps[5] = { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+    const float rudderSteps[5] = { 1.0f, 0.5f, 0.0f, -0.5f, -1.0f };
+    int prevLeftIdx = -1, prevRightIdx = -1, prevRudderIdx = -1;
 
     double lastTime = glfwGetTime();
     float distortionStrength = 0.03f, textureTiling = 0.1f;
     float specularPower = 256.0f, fresnelPower = 5.0f;
-
-    // --- Kontrola Przełącznika Fal ---
-    bool enableDefaultWaves = true;
-    float waveTransition = 1.0f;
-    double lastWaveToggleTime = -10.0;
-    const float waveTransitionDuration = 3.0f;
-    float boatDraft = 0.7f;
-
-    // --- Parametry Fal Ślądu Statku ---
-    float wakeBaseAmplitude = 0.008f;
-    float waveNumber = 12.0f;
-    float waveOmega = 4.5f;
-    float wakeSpreadFactor = 0.4f;
 
     // =========================================================
     // NOWE ZMIENNE: BUFOR HISTORII ŚLADU WODY
@@ -288,43 +328,54 @@ int main() {
         distortionStrength = glm::clamp(distortionStrength, 0.01f, 0.1f);
         fresnelPower = glm::clamp(fresnelPower, 1.0f, 10.0f);
 
-        // --- Przełącznik Fal (Klawisz O) ---
-        if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS && currentTime - lastWaveToggleTime > 0.1) {
-            enableDefaultWaves = !enableDefaultWaves;
-            lastWaveToggleTime = currentTime;
-            waveTransition = enableDefaultWaves ? 0.0f : 1.0f;
+        // --- ImGui frame and control UI ---
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        ImGui::Begin("Sterowanie");
+        ImGui::Text("Throttle (lewe/prawe)");
+        ImGui::SameLine();
+        // Two vertical sliders
+        ImGui::PushID("leftThr");
+        ImGui::VSliderInt("", ImVec2(30, 140), &leftThrottleIdx, 0, 4, "");
+        ImGui::PopID();
+        ImGui::SameLine();
+        ImGui::PushID("rightThr");
+        ImGui::VSliderInt("", ImVec2(30, 140), &rightThrottleIdx, 0, 4, "");
+        ImGui::PopID();
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::Text("Left: %.2f", throttleSteps[leftThrottleIdx]);
+        ImGui::Text("Right: %.2f", throttleSteps[rightThrottleIdx]);
+        ImGui::EndGroup();
+
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        ImGui::Text("Rudder");
+        // Avoid empty root-level label which causes ImGui assertion (conflicts with window ID)
+        ImGui::SliderInt("##rudder", &rudderIdx, 0, 4);
+        ImGui::Text("Rudder value: %.2f", rudderSteps[rudderIdx]);
+        ImGui::End();
+
+        // Print to console when values change (feedback loop)
+        if (leftThrottleIdx != prevLeftIdx || rightThrottleIdx != prevRightIdx || rudderIdx != prevRudderIdx) {
+            prevLeftIdx = leftThrottleIdx; prevRightIdx = rightThrottleIdx; prevRudderIdx = rudderIdx;
+            float leftThrottle = throttleSteps[leftThrottleIdx];
+            float rightThrottle = throttleSteps[rightThrottleIdx];
+            float rudderVal = rudderSteps[rudderIdx];
+            std::cout << "LeftThrottle=" << leftThrottle << " RightThrottle=" << rightThrottle << " Rudder=" << rudderVal << "\n";
         }
-        // Animacja przejścia fal
-        if (enableDefaultWaves && waveTransition < 1.0f) {
-            waveTransition += (float)(dt / waveTransitionDuration);
-            if (waveTransition > 1.0f) waveTransition = 1.0f;
-        } else if (!enableDefaultWaves && waveTransition > 0.0f) {
-            waveTransition -= (float)(dt / waveTransitionDuration);
-            if (waveTransition < 0.0f) waveTransition = 0.0f;
-        }
 
-        // --- Kontrola Zanurzenia Statku ([ i ]) ---
-        if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS) boatDraft += 0.01f * 2.0f;
-        if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS) boatDraft -= 0.01f * 2.0f;
-        boatDraft = glm::clamp(boatDraft, 0.0f, 2.0f);
+        // Apply ImGui controls to physics
+        float leftThrottle = throttleSteps[leftThrottleIdx];
+        float rightThrottle = throttleSteps[rightThrottleIdx];
+        float targetSpeed = ((leftThrottle + rightThrottle) * 0.5f) * maxSpeed;
+        // Smooth approach to target speed using accel
+        boatSpeed += (targetSpeed - boatSpeed) * accel * dt;
+        // Rudder set directly from UI
+        rudder = rudderSteps[rudderIdx];
 
-        // --- Kontrola Fal Ślądu Statku (5,6 = amplituda; 7,8 = częstotliwość; 9,0 = spread; -,= = omega) ---
-        if (glfwGetKey(window, GLFW_KEY_5) == GLFW_PRESS) wakeBaseAmplitude += 0.001f;
-        if (glfwGetKey(window, GLFW_KEY_6) == GLFW_PRESS) wakeBaseAmplitude -= 0.001f;
-        wakeBaseAmplitude = glm::clamp(wakeBaseAmplitude, 0.0f, 0.1f);
-
-        if (glfwGetKey(window, GLFW_KEY_7) == GLFW_PRESS) waveNumber += 0.2f;
-        if (glfwGetKey(window, GLFW_KEY_8) == GLFW_PRESS) waveNumber -= 0.2f;
-        waveNumber = glm::clamp(waveNumber, 1.0f, 30.0f);
-
-        if (glfwGetKey(window, GLFW_KEY_9) == GLFW_PRESS) wakeSpreadFactor += 0.01f;
-        if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS) wakeSpreadFactor -= 0.01f;
-        wakeSpreadFactor = glm::clamp(wakeSpreadFactor, 0.0f, 1.0f);
-
-        if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS) waveOmega += 0.05f;
-        if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS) waveOmega -= 0.05f;
-        waveOmega = glm::clamp(waveOmega, 0.5f, 10.0f);
-
+        // Keyboard fallback: allow small manual overrides
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) boatSpeed += accel * dt;
         else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) boatSpeed -= accel * dt;
         else {
@@ -338,8 +389,7 @@ int main() {
             else if (rudder < 0) rudder += rudderDecay * dt;
         }
 
-        // Inercja i opór wody
-        boatSpeed *= (1.0f - 0.08f * dt);
+        boatSpeed -= 0.02f * boatSpeed * fabsf(boatSpeed) * dt;
         boatSpeed = glm::clamp(boatSpeed, -maxSpeed * 0.5f, maxSpeed);
         rudder = glm::clamp(rudder, -1.0f, 1.0f);
 
@@ -349,13 +399,13 @@ int main() {
         boatPos += forwardVec * boatSpeed * dt;
 
         // Wysokość i orientacja łódki na falach
-        float h = getWaterHeight(boatPos.x, boatPos.z, t, enableDefaultWaves);
-        float hL_w = getWaterHeight(boatPos.x - eps, boatPos.z, t, enableDefaultWaves);
-        float hR_w = getWaterHeight(boatPos.x + eps, boatPos.z, t, enableDefaultWaves);
-        float hF = getWaterHeight(boatPos.x, boatPos.z + eps, t, enableDefaultWaves);
-        float hB = getWaterHeight(boatPos.x, boatPos.z - eps, t, enableDefaultWaves);
+        float h = getWaterHeight(boatPos.x, boatPos.z, t);
+        float hL_w = getWaterHeight(boatPos.x - eps, boatPos.z, t);
+        float hR_w = getWaterHeight(boatPos.x + eps, boatPos.z, t);
+        float hF = getWaterHeight(boatPos.x, boatPos.z + eps, t);
+        float hB = getWaterHeight(boatPos.x, boatPos.z - eps, t);
         glm::vec3 waveNormal = glm::normalize(glm::vec3(-(hR_w - hL_w) / (2 * eps), 1.0f, -(hF - hB) / (2 * eps)));
-        float boatY = h + boatDraft;
+        float boatY = h - 0.2f;
         glm::quat waveQuat = glm::quat(glm::vec3(0, 1, 0), waveNormal);
         glm::quat yawQuat = glm::angleAxis(boatYaw, glm::vec3(0, 1, 0));
         glm::quat boatOrientation = yawQuat * waveQuat;
@@ -365,8 +415,8 @@ int main() {
         glm::vec3 boatWorldPos(boatPos.x, boatY, boatPos.z);
         glm::vec3 wheelPosR = boatWorldPos + rightVec * 0.65f;
         glm::vec3 wheelPosL = boatWorldPos - rightVec * 0.65f;
-        wheelPosR.y = getWaterHeight(wheelPosR.x, wheelPosR.z, t, enableDefaultWaves);
-        wheelPosL.y = getWaterHeight(wheelPosL.x, wheelPosL.z, t, enableDefaultWaves);
+        wheelPosR.y = getWaterHeight(wheelPosR.x, wheelPosR.z, t);
+        wheelPosL.y = getWaterHeight(wheelPosL.x, wheelPosL.z, t);
 
         // =========================================================
         // ZAPISYWANIE DO BUFORA HISTORII CO 0.05 SEKUNDY
@@ -499,7 +549,6 @@ int main() {
         glUniform1f(wTexTile, textureTiling);
         glUniform1f(wSpecPow, specularPower);
         glUniform1f(wFresPow, fresnelPower);
-        glUniform1f(wWaveTransition, waveTransition);
 
         // --- PRZEKAZANIE BUFORA HISTORII DO SHADERA ---
         if (histCount > 0) {
@@ -509,12 +558,6 @@ int main() {
             glUniform1fv(wHistTime, histCount, histTime.data());
             glUniform1i(wHistCount, histCount);
         }
-
-        // --- USTAWIENIE PARAMETRÓW FAL ŚLĄDU ---
-        glUniform1f(wWakeBaseAmplitude, wakeBaseAmplitude);
-        glUniform1f(wWaveNumber, waveNumber);
-        glUniform1f(wWaveOmega, waveOmega);
-        glUniform1f(wWakeSpreadFactor, wakeSpreadFactor);
 
         glActiveTexture(GL_TEXTURE0);  glBindTexture(GL_TEXTURE_2D, reflectionFBO.texture);
         glUniform1i(glGetUniformLocation(waterProgram, "reflectionTexture"), 0);
@@ -532,23 +575,9 @@ int main() {
         glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(waterVertices.size() / 3));
         glDepthMask(GL_TRUE);
 
-        // --- HUD: Wyświetlanie danych w tytule okna ---
-        static float hudUpdateTimer = 0.0f;
-        hudUpdateTimer += dt;
-        if (hudUpdateTimer >= 0.1f) {
-            hudUpdateTimer = 0.0f;
-
-            float wheelSpeedR = boatSpeed * 3.0f;
-            float wheelSpeedL = boatSpeed * 3.0f;
-            float yawDegrees = glm::degrees(boatYaw);
-
-            char hudText[256];
-            snprintf(hudText, sizeof(hudText), 
-                "Speed: %.2f | Pos: (%.1f, %.1f) | Yaw: %.1f° | Wheel R: %.2f | Wheel L: %.2f | Waves: %s",
-                boatSpeed, boatPos.x, boatPos.z, yawDegrees, wheelSpeedR, wheelSpeedL,
-                enableDefaultWaves ? "ON" : "OFF");
-            glfwSetWindowTitle(window, hudText);
-        }
+        // Render ImGui on top
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -563,6 +592,10 @@ int main() {
     glDeleteVertexArrays(1, &wheelHubR_VAO); glDeleteVertexArrays(1, &wheelPaddlesR_VAO);
     glDeleteVertexArrays(1, &wheelHubL_VAO); glDeleteVertexArrays(1, &wheelPaddlesL_VAO);
     glDeleteProgram(waterProgram); glDeleteProgram(skyboxProgram); glDeleteProgram(boatProgram);
+    // --- ImGui cleanup ---
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     glfwTerminate();
     return 0;
 }
