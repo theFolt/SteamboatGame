@@ -6,6 +6,7 @@ out float vHeight;
 out vec4 clipSpace;
 out vec2 texCoords;
 out vec3 viewDir;
+out float vSteepness;   // [IMPROVEMENT] do modulacji piany
 
 uniform mat4 model;
 uniform mat4 view;
@@ -15,7 +16,7 @@ uniform bool u_isWater;
 uniform vec3 viewPos;
 uniform float u_waveTransition;
 
-// --- BUFOR HISTORII STATKU (Kelvin Wake / Zasada Huygensa) ---
+// --- BUFOR HISTORII STATKU ---
 const int MAX_POINTS = 90;
 uniform vec3  u_histPosR[MAX_POINTS];
 uniform vec3  u_histPosL[MAX_POINTS];
@@ -29,7 +30,7 @@ uniform float u_waveNumber;
 uniform float u_waveOmega;
 uniform float u_wakeSpreadFactor;
 
-// Parametry fal oceanicznych (tło)
+// Fale oceaniczne (tło) – 6 kierunków
 const int   NUM_WAVES     = 6;
 const vec2  waveDirs[6]   = vec2[](
     vec2(0.8,  0.6), vec2(-0.6, 0.8), vec2(0.5, -0.7),
@@ -43,28 +44,25 @@ const float waveSteep[6]  = float[](0.4,  0.35, 0.3,  0.38, 0.25, 0.32);
 void main()
 {
     vec3 pos = aPos;
+    vSteepness = 0.0;
 
-    if (!u_isWater)
-    {
-        vHeight   = 0.0;
+    if (!u_isWater) {
+        vHeight = 0.0;
         texCoords = vec2(0.0);
-        vec4 wp   = model * vec4(aPos, 1.0);
-        FragPos   = wp.xyz;
+        vec4 wp = model * vec4(aPos, 1.0);
+        FragPos = wp.xyz;
         clipSpace = projection * view * wp;
-        viewDir   = viewPos - wp.xyz;
+        viewDir = viewPos - wp.xyz;
         gl_Position = clipSpace;
         return;
     }
 
-    // ------------------------------------------------------------------
-    // 1. Fale oceaniczne (tło) — Gerstner
-    // ------------------------------------------------------------------
-    vec2 posXZ  = pos.xz;
+    // 1. Fale oceaniczne Gerstnera
+    vec2 posXZ = pos.xz;
     vec2 offset = vec2(0.0);
     float oceanH = 0.0;
 
-    for (int i = 0; i < NUM_WAVES; i++)
-    {
+    for (int i = 0; i < NUM_WAVES; i++) {
         vec2  dir   = waveDirs[i];
         float amp   = waveAmps[i];
         float freq  = waveFreqs[i];
@@ -72,56 +70,53 @@ void main()
         float steep = waveSteep[i];
 
         float phase = freq * dot(dir, posXZ) + spd * u_time;
-        oceanH  += amp  * u_waveTransition * sin(phase);
+        float sinVal = sin(phase);
+        oceanH  += amp  * u_waveTransition * sinVal;
         offset  += steep * amp * dir * cos(phase) * u_waveTransition;
+        vSteepness += steep * abs(sinVal) * u_waveTransition; // do piany
     }
+    vSteepness = clamp(vSteepness / float(NUM_WAVES), 0.0, 1.0);
 
-    pos.x  += offset.x;
-    pos.z  += offset.y;
-    pos.y  += oceanH;
+    pos.x += offset.x;
+    pos.z += offset.y;
+    pos.y += oceanH;
     vec3 worldPos = (model * vec4(pos, 1.0)).xyz;
 
-    // ------------------------------------------------------------------
-    // 2. Fale generowane z bufora historii (Ślad Statku)
-    // ------------------------------------------------------------------
+    // 2. Ślad statku – optymalizacja: pomijanie starych/słabych punktów
     float totalWakeH = 0.0;
     vec2 totalWakeOffset = vec2(0.0);
-
-    // Fizyka fali (domyślne wartości do przesłania z C++)
-    float k = u_waveNumber;     
+    float k = u_waveNumber;
     float omega = u_waveOmega;
 
-    for (int i = 0; i < u_histCount; i++)
-    {
-        // Ile czasu minęło od uderzenia w wodę w tym punkcie?
+    for (int i = 0; i < u_histCount; i++) {
         float dt = u_time - u_histTime[i];
-        if (dt < 0.0) continue;
+        // [IMPROVEMENT] pomijanie zbyt starych fal
+        if (dt < 0.0 || dt > 3.0) continue;
 
         float speed = u_histSpeed[i];
-        if (abs(speed) < 0.1) continue;
+        if (abs(speed) < 0.2) continue;
 
-        // Spread factor kontroluje jak szybko powiększa się fala
-        float spread = 0.5 + u_wakeSpreadFactor * dt; 
+        float att = exp(-dt * 0.7);
+        if (att < 0.05) continue;   // zanikła fala
 
+        float spread = 0.5 + u_wakeSpreadFactor * dt;
         float baseAmplitude = u_wakeBaseAmplitude;
 
-        // --- Ślad prawego koła ---
+        // prawe koło
         vec2 posR = u_histPosR[i].xz;
         float distR = length(worldPos.xz - posR);
-        float attR = exp(-distR / spread) * exp(-dt * 0.7); 
+        float attR = exp(-distR / spread) * att;
         float phaseR = k * distR - omega * dt;
         float hR = baseAmplitude * abs(speed) * attR * sin(phaseR);
 
-        // --- Ślad lewego koła ---
+        // lewe koło
         vec2 posL = u_histPosL[i].xz;
         float distL = length(worldPos.xz - posL);
-        float attL = exp(-distL / spread) * exp(-dt * 0.7);
+        float attL = exp(-distL / spread) * att;
         float phaseL = k * distL - omega * dt;
         float hL = baseAmplitude * abs(speed) * attL * sin(phaseL);
 
         totalWakeH += (hR + hL);
-
-        // Poziome przesunięcie (choppy)
         if (distR > 0.001) totalWakeOffset -= normalize(worldPos.xz - posR) * hR * 0.1;
         if (distL > 0.001) totalWakeOffset -= normalize(worldPos.xz - posL) * hL * 0.1;
     }
@@ -130,9 +125,6 @@ void main()
     worldPos.x += totalWakeOffset.x;
     worldPos.z += totalWakeOffset.y;
 
-    // ------------------------------------------------------------------
-    // Wyjścia
-    // ------------------------------------------------------------------
     vHeight   = oceanH + totalWakeH;
     texCoords = worldPos.xz * 0.1;
     FragPos   = worldPos;

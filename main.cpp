@@ -13,13 +13,15 @@
 #include <sstream>
 #include <string>
 #include <algorithm>
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 // --- Struktura FBO ---
 struct WaterFBO {
     unsigned int fbo, texture, depthBuffer;
     int width, height;
     void init(int w, int h) {
-        width = w; height = h;
+        width = w/2; height = h/2; // [IMPROVEMENT] half-res reflection
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glGenTextures(1, &texture);
@@ -161,16 +163,25 @@ unsigned int createVAO(const float* vertices, size_t vertexCount) {
     return VAO;
 }
 
+// --- Ulepszona, kafelkowalna proceduralna mapa DuDV ---
 unsigned int generateDUDVTexture() {
     unsigned int tex; glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
     const int size = 512; std::vector<unsigned char> data(size * size * 3);
-    for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-        float nx = (float)x / size * 2 - 1, ny = (float)y / size * 2 - 1;
-        float r1 = sqrtf(nx * nx + ny * ny), r2 = sqrtf((nx - .5f) * (nx - .5f) + (ny + .3f) * (ny + .3f));
-        int idx = (y * size + x) * 3;
-        data[idx] = (unsigned char)((sinf(r1 * 15) * cosf(r1 * 8) * .5f + .5f) * 255);
-        data[idx + 1] = (unsigned char)((cosf(r2 * 12) * sinf(r2 * 10) * .5f + .5f) * 255);
-        data[idx + 2] = 255;
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            // Przejście na współrzędne kątowe (0 do 2*PI) zapewniające idealny tiling
+            float tx = ((float)x / size) * 2.0f * 3.1415926f;
+            float ty = ((float)y / size) * 2.0f * 3.1415926f;
+
+            // Nakładanie fal liniowych o różnych częstotliwościach
+            float du = sinf(tx * 4.0f - ty * 2.0f) * 0.4f + cosf(tx * 2.0f + ty * 5.0f) * 0.2f;
+            float dv = cosf(tx * 3.0f + ty * 3.0f) * 0.4f + sinf(tx * 5.0f - ty * 2.0f) * 0.2f;
+
+            int idx = (y * size + x) * 3;
+            data[idx] = (unsigned char)((du * 0.5f + 0.5f) * 255.0f); // R (u-offset)
+            data[idx + 1] = (unsigned char)((dv * 0.5f + 0.5f) * 255.0f); // G (v-offset)
+            data[idx + 2] = 255;                                          // B
+        }
     }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size, size, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -180,17 +191,27 @@ unsigned int generateDUDVTexture() {
     glGenerateMipmap(GL_TEXTURE_2D); return tex;
 }
 
+// --- Ulepszona, kafelkowalna proceduralna mapa normalnych wody ---
 unsigned int generateNormalTexture() {
     unsigned int tex; glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
     const int size = 512; std::vector<unsigned char> data(size * size * 3);
-    for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-        float nx = (float)x / size * 2 - 1, ny = (float)y / size * 2 - 1;
-        float r1 = sqrtf(nx * nx + ny * ny), r2 = sqrtf((nx + .2f) * (nx + .2f) + (ny - .4f) * (ny - .4f));
-        float fnx = (sinf(r1 * 20) * .5f + .5f + sinf(r2 * 15) * .3f + .5f) * .5f;
-        float fny = (cosf(r1 * 20) * .5f + .5f + cosf(r2 * 15) * .3f + .5f) * .5f;
-        float nz = sqrtf(1.0f - glm::min(fnx * fnx + fny * fny, 1.0f));
-        int idx = (y * size + x) * 3;
-        data[idx] = (unsigned char)(fnx * 255); data[idx + 1] = (unsigned char)(fny * 255); data[idx + 2] = (unsigned char)(nz * 255);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float tx = ((float)x / size) * 2.0f * 3.1415926f;
+            float ty = ((float)y / size) * 2.0f * 3.1415926f;
+
+            // Generowanie drobnych zaburzeń kierunkowych (falek)
+            float hx = sinf(tx * 6.0f + ty * 3.0f) * 0.5f + sinf(tx * 12.0f - ty * 6.0f) * 0.25f;
+            float hy = cosf(tx * 4.0f - ty * 5.0f) * 0.5f + cosf(tx * 8.0f + ty * 10.0f) * 0.25f;
+
+            // Obliczenie wektora normalnego w przestrzeni stycznej (Z skierowane w górę mapy)
+            glm::vec3 n = glm::normalize(glm::vec3(hx * 0.25f, hy * 0.25f, 1.0f));
+
+            int idx = (y * size + x) * 3;
+            data[idx] = (unsigned char)((n.x * 0.5f + 0.5f) * 255.0f); // R
+            data[idx + 1] = (unsigned char)((n.y * 0.5f + 0.5f) * 255.0f); // G
+            data[idx + 2] = (unsigned char)((n.z * 0.5f + 0.5f) * 255.0f); // B
+        }
     }
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size, size, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -199,6 +220,89 @@ unsigned int generateNormalTexture() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glGenerateMipmap(GL_TEXTURE_2D); return tex;
 }
+
+// --- NOWOŚĆ: Proceduralna tekstura organicznej piany morskiej ---
+unsigned int generateFoamTexture() {
+    unsigned int tex; glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
+    const int size = 512; std::vector<unsigned char> data(size * size * 3);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            float tx = ((float)x / size) * 2.0f * 3.1415926f;
+            float ty = ((float)y / size) * 2.0f * 3.1415926f;
+
+            // Nakładanie wysokich częstotliwości (szum sinusoidalny Perlin-like)
+            float n = sinf(tx * 15.0f) * cosf(ty * 15.0f)
+                + sinf(tx * 30.0f + ty * 10.0f) * 0.5f
+                + cosf(tx * 8.0f - ty * 45.0f) * 0.25f;
+            n = (n / 1.75f) * 0.5f + 0.5f; // Sprowadzenie do przedziału 0.0 - 1.0
+
+            // Przepuszczenie przez filtr nieliniowy, aby uzyskać strukturę pęcherzyków/włókien
+            float foamIntensity = 0.0f;
+            if (n > 0.52f) {
+                foamIntensity = (n - 0.52f) / 0.48f;
+                foamIntensity = powf(foamIntensity, 1.5f); // Wyostrzenie krawędzi piany
+            }
+            unsigned char c = (unsigned char)(foamIntensity * 255.0f);
+
+            int idx = (y * size + x) * 3;
+            data[idx] = c; // R
+            data[idx + 1] = c; // G
+            data[idx + 2] = c; // B
+        }
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size, size, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glGenerateMipmap(GL_TEXTURE_2D); return tex;
+}
+
+unsigned int loadCubemap(const std::vector<std::string>& faces) {
+    unsigned int textureID;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
+    int width, height, nrChannels;
+    for (unsigned int i = 0; i < faces.size(); i++) {
+        unsigned char* data = stbi_load(faces[i].c_str(), &width, &height, &nrChannels, 0);
+        if (data) {
+            GLenum format = (nrChannels == 4) ? GL_RGBA : GL_RGB;
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+            stbi_image_free(data);
+        }
+        else {
+            std::cout << "Failed to load cubemap texture: " << faces[i] << std::endl;
+            return 0; // Return 0 if any texture fails to load
+        }
+    }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    return textureID;
+}
+
+
+unsigned int loadTexture(const char* path) {
+    unsigned int tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    int w, h, nrCh;
+    unsigned char* data = stbi_load(path, &w, &h, &nrCh, 0);
+    if (data) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, (nrCh == 4) ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+    stbi_image_free(data);
+    return tex;
+}
+
+
 
 // ===================================================================
 // MAIN
@@ -214,6 +318,13 @@ int main() {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+
+    unsigned int cubemapTexture = loadCubemap({
+    "skybox/right.png", "skybox/left.png",
+    "skybox/top.png", "skybox/bottom.png",
+    "skybox/front.png", "skybox/back.png"
+        });
 
     unsigned int waterProgram = createShaderProgram("shaders/water.vert", "shaders/water.frag");
     unsigned int skyboxProgram = createShaderProgram("shaders/skybox.vert", "shaders/skybox.frag");
@@ -252,10 +363,16 @@ int main() {
     GLint bColor = glGetUniformLocation(boatProgram, "objectColor");
     GLint bViewPos = glGetUniformLocation(boatProgram, "viewPos");
 
+
     // --- Uniformy: skybox ---
     GLint sProjection = glGetUniformLocation(skyboxProgram, "projection");
     GLint sView = glGetUniformLocation(skyboxProgram, "view");
-    GLint sTime = glGetUniformLocation(skyboxProgram, "u_time");
+    GLint sTime = glGetUniformLocation(skyboxProgram, "time"); // Changed from "u_time" to match skybox.frag
+    GLint sSunDir = glGetUniformLocation(skyboxProgram, "sunDirection");
+    GLint sSunGlow = glGetUniformLocation(skyboxProgram, "enableSunGlow");
+
+    // Define a normalized direction for your light source (sun)
+    glm::vec3 sunDir = glm::normalize(glm::vec3(0.5f, 0.8f, -0.4f));
 
     WaterFBO reflectionFBO, refractionFBO;
     reflectionFBO.init(1280, 720);
@@ -263,15 +380,53 @@ int main() {
 
     unsigned int dudvTexture = generateDUDVTexture();
     unsigned int normalTexture = generateNormalTexture();
+    unsigned int foamTexture = generateFoamTexture();
 
     float skyboxVertices[] = {
-        -1, 1,-1, -1,-1,-1,  1,-1,-1,   1,-1,-1,  1, 1,-1, -1, 1,-1,
-        -1,-1, 1, -1,-1,-1, -1, 1,-1,  -1, 1,-1, -1, 1, 1, -1,-1, 1,
-         1,-1,-1,  1,-1, 1,  1, 1, 1,   1, 1, 1,  1, 1,-1,  1,-1,-1,
-        -1,-1, 1, -1, 1, 1,  1, 1, 1,   1, 1, 1,  1,-1, 1, -1,-1, 1,
-        -1, 1,-1,  1, 1,-1,  1, 1, 1,   1, 1, 1, -1, 1, 1, -1, 1,-1,
-        -1,-1,-1, -1,-1, 1,  1,-1,-1,   1,-1,-1, -1,-1, 1,  1,-1, 1
+        // positions          
+        -1.0f,  1.0f, -1.0f,
+        -1.0f, -1.0f, -1.0f,
+         1.0f, -1.0f, -1.0f,
+         1.0f, -1.0f, -1.0f,
+         1.0f,  1.0f, -1.0f,
+        -1.0f,  1.0f, -1.0f,
+
+        -1.0f, -1.0f,  1.0f,
+        -1.0f, -1.0f, -1.0f,
+        -1.0f,  1.0f, -1.0f,
+        -1.0f,  1.0f, -1.0f,
+        -1.0f,  1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,
+
+         1.0f, -1.0f, -1.0f,
+         1.0f, -1.0f,  1.0f,
+         1.0f,  1.0f,  1.0f,
+         1.0f,  1.0f,  1.0f,
+         1.0f,  1.0f, -1.0f,
+         1.0f, -1.0f, -1.0f,
+
+        -1.0f, -1.0f,  1.0f,
+        -1.0f,  1.0f,  1.0f,
+         1.0f,  1.0f,  1.0f,
+         1.0f,  1.0f,  1.0f,
+         1.0f, -1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,
+
+        -1.0f,  1.0f, -1.0f,
+         1.0f,  1.0f, -1.0f,
+         1.0f,  1.0f,  1.0f,
+         1.0f,  1.0f,  1.0f,
+        -1.0f,  1.0f,  1.0f,
+        -1.0f,  1.0f, -1.0f,
+
+        -1.0f, -1.0f, -1.0f,
+        -1.0f, -1.0f,  1.0f,
+         1.0f, -1.0f, -1.0f,
+         1.0f, -1.0f, -1.0f,
+        -1.0f, -1.0f,  1.0f,
+         1.0f, -1.0f,  1.0f
     };
+
     unsigned int skyboxVAO = createVAO(skyboxVertices, sizeof(skyboxVertices) / sizeof(float));
 
     const float waterHalfSize = 35.0f;
@@ -545,9 +700,23 @@ int main() {
 
         glUseProgram(skyboxProgram);
         glUniformMatrix4fv(sProjection, 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(sView, 1, GL_FALSE, glm::value_ptr(reflView));
+
+        // FIX: Strip translation out of the reflection view matrix
+        glm::mat4 reflSkyboxView = glm::mat4(glm::mat3(reflView));
+        glUniformMatrix4fv(sView, 1, GL_FALSE, glm::value_ptr(reflSkyboxView));
+
         glUniform1f(sTime, t);
-        glBindVertexArray(skyboxVAO); glDrawArrays(GL_TRIANGLES, 0, 36);
+        glUniform3fv(sSunDir, 1, glm::value_ptr(sunDir));
+        glUniform1i(sSunGlow, 1); // Enable the sun glow feature
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+        glUniform1i(glGetUniformLocation(skyboxProgram, "skybox"), 0);
+
+        glDepthFunc(GL_LEQUAL); // FIX: Allow fragments with a depth of 1.0 to pass
+        glBindVertexArray(skyboxVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+        glDepthFunc(GL_LESS);  // Reset back to default
 
         glEnable(GL_CLIP_DISTANCE0);
         glUseProgram(boatProgram);
@@ -570,9 +739,22 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glUseProgram(skyboxProgram);
         glUniformMatrix4fv(sProjection, 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(sView, 1, GL_FALSE, glm::value_ptr(view));
+
+        // FIX: Strip translation out of the standard view matrix
+        glm::mat4 refrSkyboxView = glm::mat4(glm::mat3(view));
+        glUniformMatrix4fv(sView, 1, GL_FALSE, glm::value_ptr(refrSkyboxView));
+
         glUniform1f(sTime, t);
+        glUniform3fv(sSunDir, 1, glm::value_ptr(sunDir));
+        glUniform1i(sSunGlow, 1);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+        glUniform1i(glGetUniformLocation(skyboxProgram, "skybox"), 0);
+
+        glDepthFunc(GL_LEQUAL); // FIX
         glBindVertexArray(skyboxVAO); glDrawArrays(GL_TRIANGLES, 0, 36);
+        glDepthFunc(GL_LESS);  // FIX
         refractionFBO.unbind();
 
         // ====================================================
@@ -584,9 +766,22 @@ int main() {
 
         glUseProgram(skyboxProgram);
         glUniformMatrix4fv(sProjection, 1, GL_FALSE, glm::value_ptr(projection));
-        glUniformMatrix4fv(sView, 1, GL_FALSE, glm::value_ptr(view));
+
+        // FIX: Strip translation out of the standard view matrix
+        glm::mat4 mainSkyboxView = glm::mat4(glm::mat3(view));
+        glUniformMatrix4fv(sView, 1, GL_FALSE, glm::value_ptr(mainSkyboxView));
+
         glUniform1f(sTime, t);
+        glUniform3fv(sSunDir, 1, glm::value_ptr(sunDir));
+        glUniform1i(sSunGlow, 1);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+        glUniform1i(glGetUniformLocation(skyboxProgram, "skybox"), 0);
+
+        glDepthFunc(GL_LEQUAL); // FIX
         glBindVertexArray(skyboxVAO); glDrawArrays(GL_TRIANGLES, 0, 36);
+        glDepthFunc(GL_LESS);  // FIX
 
         // Łódka
         glUseProgram(boatProgram);
@@ -656,6 +851,8 @@ int main() {
         glUniform1i(glGetUniformLocation(waterProgram, "dudvMap"), 2);
         glActiveTexture(GL_TEXTURE3);  glBindTexture(GL_TEXTURE_2D, normalTexture);
         glUniform1i(glGetUniformLocation(waterProgram, "normalMap"), 3);
+        glActiveTexture(GL_TEXTURE4);  glBindTexture(GL_TEXTURE_2D, foamTexture);
+        glUniform1i(glGetUniformLocation(waterProgram, "foamTexture"), 4);
 
         glm::mat4 waterModel = glm::mat4(1.0f);
         glUniformMatrix4fv(wModel, 1, GL_FALSE, glm::value_ptr(waterModel));
@@ -682,6 +879,7 @@ int main() {
 
     reflectionFBO.cleanup(); refractionFBO.cleanup();
     glDeleteTextures(1, &dudvTexture); glDeleteTextures(1, &normalTexture);
+    glDeleteTextures(1, &foamTexture);
     glDeleteVertexArrays(1, &skyboxVAO); glDeleteVertexArrays(1, &waterVAO);
     glDeleteVertexArrays(1, &hullVAO); glDeleteVertexArrays(1, &deckVAO);
     glDeleteVertexArrays(1, &cabinVAO); glDeleteVertexArrays(1, &wheelhouseVAO);

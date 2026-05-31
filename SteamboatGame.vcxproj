@@ -27,6 +27,7 @@
     <ClInclude Include="glad.h" />
     <ClInclude Include="glfw3.h" />
     <ClInclude Include="KHR\khrplatform.h" />
+    <ClInclude Include="stb_image.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include=".github\copilot-instructions.md" />
