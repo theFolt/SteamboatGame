@@ -16,7 +16,7 @@ uniform vec3 viewPos;
 uniform float u_waveTransition;
 
 // --- BUFOR HISTORII STATKU (Kelvin Wake / Zasada Huygensa) ---
-const int MAX_POINTS = 60;
+const int MAX_POINTS = 90;
 uniform vec3  u_histPosR[MAX_POINTS];
 uniform vec3  u_histPosL[MAX_POINTS];
 uniform float u_histSpeed[MAX_POINTS];
